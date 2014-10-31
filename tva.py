@@ -23,7 +23,7 @@ import pprint
 import binascii
 from pprint import pprint
 
-SOCK_TIMEOUT = 5
+SOCK_TIMEOUT = 10
 
 
 module_logger = logging.getLogger('movistarxmltv.tva')
@@ -45,7 +45,12 @@ class TvaStream(object):
         # --   --------   -----  ------  ----  ---------  -------------      --
         # 00   00 00 00    F1    X 0 00   00     00 00          00           00
         #FIXME: XMLsize print is incorrect
-        data = socket.recv(1500)
+        try:
+            data = socket.recv(1500)
+        except ValueError:
+            self.logger.info("Network timeout in socket.recv(1500)")
+            chunk = {}
+            return chunk
         chunk = {}
         chunk["end"] = struct.unpack('B',data[:1])[0]
         chunk["size"] = struct.unpack('>HB',data[1:4])[0]
@@ -72,7 +77,15 @@ class TvaStream(object):
 
         #Wait for an end chunk to start by the beginning
         while not (chunk["end"]):
-            chunk = self._getchunk(sock)
+            try:
+                chunk = self._getchunk(sock)
+
+            except ValueError:
+                self.logger.info("Network timeout")
+                chunk["end"] = 0
+
+                continue
+
             firstfile = str(chunk["filetype"])+"_"+str(chunk["fileid"])
         #Loop until firstfile
         while (loop):
@@ -171,9 +184,14 @@ class TvaParser(object):
         #root = tree.getroot()
         if root[0][0][0].get('serviceIDRef') is not None:
             channelid = root[0][0][0].get('serviceIDRef')
+        else:
+            self.logger.info("No serviceIDRef found")
+            return None
 #            self.logger.info("\nParsing serviceIDRef:" + str(serviceIDRef))
 
+
         for child in root[0][0][0]:
+            programmeId = None
             if child[0].get('crid') is not None:
                 programmeId = child[0].get('crid').split('/')[5]   # id for description
             if child[1][1][0] is not None:
@@ -207,8 +225,24 @@ class TvaParser(object):
                 stopTimePy = startTimePy + timedelta(minutes=durationPy)
                 stopTime = stopTimePy.strftime('%Y%m%d%H%M%S') # Stop time
 
-            url ='http://www-60.svc.imagenio.telefonica.net:2001/appserver/mvtv.do?action=getEpgInfo&extInfoID='+ programmeId +                '&tvWholesaler=1'
-            strProgramme = urllib.urlopen(url).read().replace('\n',' ')
+            if programmeId is not None:
+                url ='http://www-60.svc.imagenio.telefonica.net:2001/appserver/mvtv.do?action=getEpgInfo&extInfoID='+ programmeId + '&tvWholesaler=1'
+            else:
+                continue
+            download = None
+            try:
+		download = urllib.urlopen(url)
+                if download is not None:
+	            strProgramme = download.read().replace('\n',' ')
+                else:
+                    print download
+                    continue
+            except socket.error as serror:
+                message = serror.message
+                self.logger.info("Error downloading the extra info")
+                continue
+                pass
+ 
             #   Genre can be also got from the extra information
             #    s = strProgramme[:]
             #    genre = s.split('"genre":"')[1].split('","')[0] # Genre
@@ -219,21 +253,26 @@ class TvaParser(object):
                 year = None
 
             s = strProgramme[:]
-            fullTitle = child[1][0].text.replace('\n', ' ')
+
+            tvhcategory = None
+            if s.find("Cine: ")>0:
+                tvhcategory = "Movie / Drama"
+
+
+            fullTitle = child[1][0].text.replace('\n', ' ').replace('Cine: ', '')
 
             s = fullTitle[:].replace('\n',' ')
             m = re.search(r"(.*?) T(\d+) Cap. (\d+) - (.+)", s)
             n = re.search(r"(.*?) T(\d+) Cap. (\d+)", s)
+            p = re.search(r"(.*?): (.*?)", s)
             title = None
             episodeShort = None
             extra = ""
             if m:
 #                self.logger.info("Grabbing episode in: " + fullTitle)
-
                 try:
-
-                    season = int(m.group(2)) + 1 # season
-                    episode = int(m.group(3)) +1 # episode
+                    season = int(m.group(2))  # season
+                    episode = int(m.group(3))  # episode
                     episodeTitle =  m.group(4)
                     if episode < 10:
                         episode = "0"+str(episode)
@@ -242,15 +281,15 @@ class TvaParser(object):
                     episodeShort = "S"+str(season)+"E"+str(episode)
                     extra =  episodeShort +" "+episodeTitle
                 except ValueError:
-                        self.logger.info("m: Error getting episode in: " + fullTitle)
+                    self.logger.info("m: Error getting episode in: " + fullTitle)
 
                 title = m.group(1) # title
             elif n:
 #                self.logger.info("Grabbing episode in: " + fullTitle)
 
                 try:
-                    season = int(n.group(2)) + 1 # season
-                    episode = int(n.group(3)) +1 # episode
+                    season = int(n.group(2))  # season
+                    episode = int(n.group(3))  # episode
                     if episode < 10:
                         episode = "0"+str(episode)
                     if season < 10:
@@ -263,11 +302,21 @@ class TvaParser(object):
             elif s.find(': Episodio ') > 0 :
                 try:
                         episode = int(s.split(': Episodio ')[1].split('"')[0]) # Episode
-                        episode = episode + 1 # Episode
+                        episode = episode  # Episode
                         season = 0
                 except ValueError:
                         self.logger.info("Error getting episode in: " + fullTitle)
                 title = s.split(': Episodio ')[0] # Title
+            elif p:
+                self.logger.info("Grabbing episode in: " + fullTitle)
+                try:
+                    title = p.group(1) # title
+                    episodeTitle =  p.group(2)
+                    episode = None
+                    season = None
+                except ValueError:
+                    self.logger.info("n: Error getting episode in: " + fullTitle)
+
             else:
                 episode = None
                 season = None
@@ -309,22 +358,42 @@ class TvaParser(object):
             cTitle.text = title.encode(TvaParser.ENCODING_EPG)
             cCategory = SubElement(cProgramme, "category", {"lang":"es"})
             category = None
+
             if subgenre is not None:
-                category = subgenre
+                category = subgenre.encode(TvaParser.ENCODING_EPG)
                 cCategory.text = category
             elif genre is None:
-                category = genre
+                category = genre.encode(TvaParser.ENCODING_EPG)
                 cCategory.text = category
 
+            self.logger.info(category)
+
+#            if category is not None:
+#		if (category.find('DRAMA') or category.find('ANIMACI') or category.find('COMEDIA') or  category.find('LICO') or  category.find('ACCI') or  category.find('AVENTURAS')):
+#                    cCategory.text = 'Movie / Drama'
+#                    self.logger.info("Movie found: "+fullTitle )
+
+            if tvhcategory is not None:
+                cCategory.text = tvhcategory
+                self.logger.info("Movie found: "+fullTitle )
+
+            if season is not None:
+                cCategory.text = 'Show / Game show'
+                self.logger.info("Serie found: "+fullTitle )
+                
+                
+
+
             if episode is not None and season is not None:
+
                 cEpisode = SubElement(cProgramme, "episode-num", {"system":"xmltv_ns"})
-                cEpisode.text = str(season)+"."+str(episode)+"."
+                cEpisode.text = str(int(season)-1)+"."+str(int(episode)-1)+"."
             elif episode is not None and season is None:
                 cEpisode = SubElement(cProgramme, "episode-num", {"system":"xmltv_ns"})
-                cEpisode.text = "."+str(episode)+"."
+                cEpisode.text = "."+str(int(episode)-1)+"."
             elif episode is None and season is not None:
                 cEpisode = SubElement(cProgramme, "episode-num", {"system":"xmltv_ns"})
-                cEpisode.text = str(season)+".."
+                cEpisode.text = str(int(season)-1)+".."
 
             if len(duration) > 0:
                 cDuration = SubElement(cProgramme, "length", {"units":"minutes"})
@@ -349,7 +418,6 @@ class TvaParser(object):
 
             if description is not None:
                 description = description + fullTitle
-
                 cDesc = SubElement(cProgramme, "desc", {"lang":"es"})
                 cDesc.text = description.encode(TvaParser.ENCODING_EPG)
 

@@ -21,9 +21,11 @@ from xml.etree.ElementTree import Element, SubElement, Comment, ElementTree
 
 from tva import TvaStream, TvaParser
 
-logger = logging.getLogger('movistarxmltv')
+OUTPUT_PATH='/storage/'
+
+logger = logging.getLogger(OUTPUT_PATH+'movistarxmltv')
 logger.setLevel(logging.DEBUG)
-fh = logging.FileHandler('/home/pi/.hts/tvheadend/movistar.log')
+fh = logging.FileHandler('movistar.log')
 fh.setLevel(logging.INFO)
 ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
@@ -40,9 +42,10 @@ SOCK_TIMEOUT = 5
 MCAST_GRP_START = '239.0.2.129'
 MCAST_PORT = 3937
 MCAST_CHANNELS = '239.0.2.140'
-FILE_XML = '/home/pi/.hts/tvheadend/tv_grab_es_movistar.xml'
-FILE_M3U = '/home/pi/.hts/tvheadend/tv_grab_es_movistar.m3u'
-FILE_LOG = '/home/pi/.hts/tvheadend/tv_grab_es_movistar.log'
+
+FILE_XML = OUTPUT_PATH+'tv_grab_es_movistar.xml'
+FILE_M3U = OUTPUT_PATH+'tv_grab_es_movistar.m3u'
+FILE_LOG = OUTPUT_PATH+'tv_grab_es_movistar.log'
 
 
 # Andalucia 15
@@ -127,9 +130,9 @@ strFirstDay = now + timedelta(days=int(first_day))
 strLastDay = now + timedelta(days=int(last_day))
 
 ElementTree(OBJ_XMLTV).write(FILE_XML)
-FILE_XML = '/home/pi/.hts/tvheadend/tv_grab_es_movistar_'+strFirstDay.strftime("%Y-%m-%d")+'_'+strLastDay.strftime("%Y-%m-%d")+'.xml'
+FILE_XML = OUTPUT_PATH+'tv_grab_es_movistar_'+strFirstDay.strftime("%Y-%m-%d")+'_'+strLastDay.strftime("%Y-%m-%d")+'.xml'
 ElementTree(OBJ_XMLTV).write(FILE_XML)
-FILE_XML = '/home/pi/.hts/tvheadend/tv_grab_es_movistar.xml'
+FILE_XML = OUTPUT_PATH+'tv_grab_es_movistar.xml'
 ElementTree(OBJ_XMLTV).write(FILE_XML)
 
 grabbingDuration = datetime.datetime.now() - now
